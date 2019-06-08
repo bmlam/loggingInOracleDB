@@ -1,4 +1,4 @@
-CREATE OR REPLACE PACKAGE body pck_std_log
+CREATE OR REPLACE PACKAGE body pck_std_log_v2
 AS
 /***************************************************************************\
 Package Description:
@@ -28,13 +28,14 @@ Limitations:
   Constant declaration
 *******************************************************************/
 --
-gc_pkg_name      constant varchar2(30) := 'PCK_STD_LOG';
+gc_pkg_name      constant varchar2(30) := $$PLSQL_UNIT;
 gc_nl      constant varchar2(1) := chr(10);
 --
-c_il_debug     constant log_table.info_level%type := 'D';
-c_il_info      constant log_table.info_level%type := 'I';
-c_il_error     constant log_table.info_level%type := 'E';
-c_il_publish   constant log_table.info_level%type := 'P';
+c_il_debug     constant log_table_v2.info_level%type := 'D';
+c_il_info      constant log_table_v2.info_level%type := 'I';
+c_il_error     constant log_table_v2.info_level%type := 'E';
+c_il_publish   constant log_table_v2.info_level%type := 'P';
+c_il_warning   constant log_table_v2.info_level%type := 'W';
 --
 c_sess_max_debug     constant binary_integer := 1000;
 c_sess_max_info      constant binary_integer := 10000;
@@ -47,8 +48,6 @@ c_heartbeat_modulo   constant binary_integer := 10000;
 -- The following values for data length need to be adjusted
 -- column size of the corresponding columns change
 --
-c_comp_max_len       binary_integer := 30;
-c_subcomp_max_len    binary_integer := 30;
 c_text_max_len       binary_integer := 1000;
 
 g_cached_long_flag boolean;
@@ -60,7 +59,7 @@ g_cached_long_text clob ;
 g_sess_id integer;
 g_last_db_check date;
 g_debug_on boolean;
-g_osuser log_table.osuser%type;
+g_osuser log_table_v2.osuser%type;
 --
 g_sess_cnt_debug     binary_integer := 0;
 g_sess_cnt_info      binary_integer := 0;
@@ -69,11 +68,67 @@ g_sess_cnt_publish   binary_integer := 0;
 g_sess_cnt_info_long binary_integer := 0;
 --
 --
-g_log_id       log_table.id%type;
+g_log_id       log_table_v2.id%type;
 v_errmsg       varchar2(2000);
 /*******************************************************************
   Internal routines
 *******************************************************************/
+FUNCTION my_caller_precursor 
+( a_offset_from_anchor NUMBER DEFAULT 1 
+) 
+RETURN VARCHAR2
+AS
+  lc_anchor_name  CONSTANT VARCHAR2 (100) := UPPER( 'my_caller_precursor');
+  l_call_stack VARCHAR2(2000);
+   
+  ltab_stack_line ORA_MINING_VARCHAR2_NT := ORA_MINING_VARCHAR2_NT();
+  lc_sep  CONSTANT VARCHAR2(2) := CHR(10);
+  l_scan_from  NUMBER := 1;
+  l_sep_pos    NUMBER := 0;
+  lc_anchor_line_ix NUMBER;
+  l_loop_count_down NUMBER := 50;
+  
+  l_return  log_table_v2.caller_position%TYPE;
+BEGIN
+  l_call_stack := dbms_utility.format_call_stack;
+  DBMS_OUTPUT.pUT_LINE( $$PLSQL_UNIT||';'||$$PLSQL_LINE ||' a_offset_from_anchor: '||a_offset_from_anchor );
+  WHILE l_loop_count_down > 0 LOOP
+    l_sep_pos := INSTR( l_call_stack, lc_sep, l_scan_from );
+    ltab_stack_line.extend;
+    IF l_sep_pos > 0 THEN 
+      ltab_stack_line( ltab_stack_line.count ) := 
+        REGEXP_REPLACE( SUBSTR( l_call_stack, l_scan_from, l_sep_pos-l_scan_from ), ' +', ' ' );
+      l_scan_from := l_sep_pos + LENGTH( lc_sep );
+    ELSE
+      ltab_stack_line( ltab_stack_line.count ) := SUBSTR( l_call_stack, l_scan_from );
+      
+      EXIT; 
+    END IF; -- found separator 
+    DBMS_OUTPUT.pUT_LINE( $$PLSQL_UNIT||';'||$$PLSQL_LINE||' l_loop_count_down:'||l_loop_count_down||'  '||ltab_stack_line( ltab_stack_line.count ) );
+ 
+ l_loop_count_down := l_loop_count_down - 1;
+  END LOOP; -- OVER lines in stack 
+  DBMS_OUTPUT.pUT_LINE( $$PLSQL_UNIT||';'||$$PLSQL_LINE||' stack lines found: '||ltab_stack_line.count);
+  
+  FOR i IN 1 .. ltab_stack_line.COUNT LOOP
+    IF i < 3 THEN 
+      CONTINUE; -- first two lines is header, third line probably too but lets be careful and check it anyway
+    END IF; 
+    IF  ltab_stack_line(i) LIKE '%'||$$PLSQL_UNIT||'.'||lc_anchor_name  
+    THEN 
+      lc_anchor_line_ix := i;
+      DBMS_OUTPUT.pUT_LINE( $$PLSQL_UNIT||';'||$$PLSQL_LINE||' found caller' );
+      
+      EXIT;
+    END IF; -- found anchor  
+  END LOOP;
+  IF lc_anchor_line_ix IS NOT NULL AND lc_anchor_line_ix + a_offset_from_anchor > 0 
+  THEN 
+    l_return := regexp_replace( ltab_stack_line(lc_anchor_line_ix + a_offset_from_anchor)
+      , '^0x([a-f[:digit:]]+) +([[:digit:]]+) +([[:alnum:]_\. ]+)', '\3:\2');
+  END IF; 
+  RETURN l_return;
+END my_caller_precursor;
 
 /***************************************************************************/
 function bool2char ( p_flag boolean) return varchar2
@@ -98,7 +153,6 @@ begin
 	  or g_debug_on is null
 		or sysdate-g_last_db_check > 10 / (24*60*60) -- last check more than 10 seconds ago
 	then
-		g_osuser := upper(sys_context('USERENV','OS_USER'));
 		dbms_output.put_line('g_osuser : '||g_osuser);
 		g_last_db_check := sysdate;
 		select count(*) into l_cnt
@@ -121,12 +175,13 @@ begin
 end debug_on;
 
 procedure p_insert (
-	a_info_level   log_table.info_level%type,
-	a_err_code     log_table.err_code%type default 0,
-	a_comp     IN log_table.component%type,
-	a_subcomp  IN log_table.subcomponent%type default null,
-	a_text     IN log_table.text%type
-) as
+	a_info_level   log_table_v2.info_level%type,
+	a_err_code     log_table_v2.err_code%type default 0,
+	a_comp     IN log_table_v2.caller_position%type,
+	a_subcomp  IN log_table_v2.caller_position%type default null,
+	a_text     IN log_table_v2.text%type
+ ,a_caller_position  IN VARCHAR2 DEFAULT NULL
+) AS 
 /***************************************************************************\
 Procedure Description:
 	The "single point of INSERT" to the log table
@@ -141,34 +196,19 @@ DDMMRR  Who   What
 140301  Lam   Created
 \***************************************************************************/
 	pragma autonomous_transaction;
+  l_caller_position log_table_v2.caller_position%TYPE;
 begin
-	/* if g_sess_id not yet set, then it is the first invocation
-	of this logging package by a session
-	*/
--- mysteriously, after introduction of the procedure INFO_LONG,
--- the package variable V_LOG_SESSION seems to have dual values:
--- Text message start with 'LONG LONG TEXT' has a different LOG_SESS_ID!
--- So I work around by moving the assignment into the package initialization 
--- code.
--- 
--- 	if g_sess_id is null then
--- 		g_sess_id := g_log_id;
--- 	end if;
-	insert into log_table (
-		id,
+  
+  insert into log_table_v2 (
 		log_sess_id,
-		component,
-		subcomponent,
-		log_user,   timestamp,        info_level,
+		caller_position,
+		log_user,   osuser,      info_level,
 		text,
 		err_code
 	) values (
---		g_log_id,
-		log_table_seq.nextval,
 		g_sess_id,
-		nvl(substr(a_comp, 1, c_comp_max_len), 'NULL'),
-		substr(a_subcomp, 1, c_subcomp_max_len),
-		user,       sysdate,          a_info_level,
+		COALESCE( a_caller_position, a_comp||'.'||a_subcomp )
+		, user,      g_osuser,     a_info_level,
 		substr(a_text, 1, c_text_max_len),
 		a_err_code
 	)
@@ -184,9 +224,9 @@ end p_insert;
   Interface routines
 *******************************************************************/
 PROCEDURE publish (
-	a_comp     IN log_table.component%type,
-	a_subcomp  IN log_table.subcomponent%type default null,
-	a_text     IN log_table.text%type
+	a_comp     IN log_table_v2.caller_position%type,
+	a_subcomp  IN log_table_v2.caller_position%type default null,
+	a_text     IN log_table_v2.text%type
 ) as
 /***************************************************************************\
 Procedure Description:
@@ -210,8 +250,8 @@ begin
 			p_insert(a_info_level=> c_il_info
 				, a_comp=> gc_pkg_name, a_subcomp=> c_procname,
 				a_text=> 'Value of g_sess_cnt_PUBLISH reaches ' || g_sess_cnt_publish ||
-				'. Component: ' || a_comp ||
-				'. Subcomponent: ' || a_subcomp
+				'. caller_position: ' || a_comp ||
+				'. caller_position: ' || a_subcomp
 			);
 		end if;
 	end if;
@@ -223,23 +263,24 @@ exception
 end;
 --
 PROCEDURE info (
-	a_comp     IN log_table.component%type,
-	a_subcomp  IN log_table.subcomponent%type default null,
-	a_text     IN log_table.text%type
+	a_comp     IN log_table_v2.caller_position%type,
+	a_subcomp  IN log_table_v2.caller_position%type default null,
+	a_text     IN log_table_v2.text%type
 ) as
 /***************************************************************************\
 \***************************************************************************/
 	c_procname   constant varchar2(60) := 'INFO';
+  l_caller_position  log_table_v2.caller_position%TYPE;
 begin
+  l_caller_position :=  my_caller_precursor( a_offset_from_anchor=> 2 );
 	if g_sess_cnt_info <= c_sess_max_info then
 		p_insert( a_info_level=>c_il_info, a_comp=> a_comp, a_subcomp=> a_subcomp
-		, a_text=> a_text);
+		, a_text=> a_text, a_caller_position => l_caller_position );
 	else
 		if mod(g_sess_cnt_info, c_heartbeat_modulo) = 1 then
 			p_insert( a_info_level=> c_il_info, a_comp=> gc_pkg_name, a_subcomp=> c_procname,
-				a_text=> 'Value of g_sess_cnt_info reaches ' || g_sess_cnt_info ||
-				'. Component: ' || a_comp ||
-				'. Subcomponent: ' || a_subcomp
+				a_text=> 'Value of g_sess_cnt_info reaches ' || g_sess_cnt_info 
+        , a_caller_position => l_caller_position
 			);
 		end if;
 	end if;
@@ -251,9 +292,9 @@ exception
 end;
 --
 PROCEDURE debug (
-	a_comp     IN log_table.component%type,
-	a_subcomp  IN log_table.subcomponent%type default null,
-	a_text     IN log_table.text%type
+	a_comp     IN log_table_v2.caller_position%type,
+	a_subcomp  IN log_table_v2.caller_position%type default null,
+	a_text     IN log_table_v2.text%type
 ) as
 /***************************************************************************\
 Procedure Description:
@@ -279,8 +320,8 @@ begin
 				p_insert( a_info_level=> c_il_info, a_comp=> gc_pkg_name
 				, a_subcomp=> c_procname,
 					a_text => 'Value of g_sess_cnt_debug reaches ' || g_sess_cnt_debug ||
-					'. Component: ' || a_comp ||
-					'. Subcomponent: ' || a_subcomp
+					'. caller_position: ' || a_comp ||
+					'. caller_position: ' || a_subcomp
 				);
 			end if;
 		end if;
@@ -293,11 +334,11 @@ exception
 end;
 --
 PROCEDURE error (
-	a_err_code IN log_table.err_code%type,
-	a_comp     IN log_table.component%type,
-	a_subcomp  IN log_table.subcomponent%type default null,
-	a_text     IN log_table.text%type,
-	a_log_id  OUT   log_table.id%type
+	a_err_code IN log_table_v2.err_code%type,
+	a_comp     IN log_table_v2.caller_position%type,
+	a_subcomp  IN log_table_v2.caller_position%type default null,
+	a_text     IN log_table_v2.text%type,
+	a_log_id  OUT   log_table_v2.id%type
 ) as
 /***************************************************************************\
 Procedure Description:
@@ -326,8 +367,8 @@ begin
 			p_insert( a_info_level=> c_il_info
 			, a_comp=> gc_pkg_name, a_subcomp=> c_procname,
 				a_text=> 'Value of g_sess_cnt_error reaches ' || g_sess_cnt_error ||
-				'. Component: ' || a_comp ||
-				'. Subcomponent: ' || a_subcomp
+				'. caller_position: ' || a_comp ||
+				'. caller_position: ' || a_subcomp
 			);
 		end if;
 	end if;
@@ -369,8 +410,8 @@ begin
 end switch_debug;
 
 PROCEDURE info_long (
-	a_comp     IN log_table.component%type,
-	a_subcomp  IN log_table.subcomponent%type default null,
+	a_comp     IN log_table_v2.caller_position%type,
+	a_subcomp  IN log_table_v2.caller_position%type default null,
 	a_text     IN clob
 ) as
 /***************************************************************************\
@@ -406,8 +447,8 @@ begin
 				a_comp=> gc_pkg_name, a_subcomp=> c_procname, 
 				a_text => 
 				'Value of g_sess_cnt_info_long reaches ' || g_sess_cnt_info_long ||
-				'. Component: ' || a_comp ||
-				'. Subcomponent: ' || a_subcomp
+				'. caller_position: ' || a_comp ||
+				'. caller_position: ' || a_subcomp
 			);
 		end if;
 	end if; -- check sess_cnt_info_long 
@@ -418,10 +459,10 @@ end INFO_LONG;
 /***************************************************************************\
 \***************************************************************************/
 PROCEDURE error (
-	a_err_code IN log_table.err_code%type,
-	a_comp     IN log_table.component%type,
-	a_subcomp  IN log_table.subcomponent%type default null,
-	a_text     IN log_table.text%type
+	a_err_code IN log_table_v2.err_code%type,
+	a_comp     IN log_table_v2.caller_position%type,
+	a_subcomp  IN log_table_v2.caller_position%type default null,
+	a_text     IN log_table_v2.text%type
 ) as
 	l_log_id integer;
 begin
@@ -434,8 +475,59 @@ begin
 end error;
 
 
+PROCEDURE dbx (
+	a_text     IN log_table_v2.text%type
+) AS 
+BEGIN
+NULL;
+END dbx;
+
+PROCEDURE inf (
+	a_text     IN log_table_v2.text%type
+) AS 
+  l_caller_position  log_table_v2.caller_position%TYPE;
+BEGIN
+  l_caller_position :=  my_caller_precursor( a_offset_from_anchor=> 2 );
+  
+  if g_sess_cnt_info <= c_sess_max_info then
+		p_insert( a_info_level=>c_il_info, a_comp=> NULL
+		, a_text=> a_text, a_caller_position => l_caller_position );
+	else
+		if mod(g_sess_cnt_info, c_heartbeat_modulo) = 1 then
+			p_insert( a_info_level=> c_il_info, a_comp=> NULL 
+				, a_text=> 'Value of g_sess_cnt_info reaches ' || g_sess_cnt_info 
+        , a_caller_position => l_caller_position
+			);
+		end if;
+	end if;
+	g_sess_cnt_info := g_sess_cnt_info + 1;
+END inf;
+
+PROCEDURE warn (
+	a_text     IN log_table_v2.text%type
+) AS 
+BEGIN
+NULL;
+END warn;
+
+PROCEDURE err (
+	a_text     IN log_table_v2.text%type
+ ,a_errno    IN NUMBER 
+) AS 
+BEGIN
+NULL;
+END err;
+
+PROCEDURE pub (
+	a_text     IN log_table_v2.text%type
+) AS 
+BEGIN
+NULL;
+END pub;
+
 begin -- Package init stuff 
 	g_sess_id := sys_context('USERENV','SESSIONID');
+	g_osuser := upper(sys_context('USERENV','OS_USER'));
 end;
 /
 

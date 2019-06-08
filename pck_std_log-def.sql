@@ -1,4 +1,4 @@
-CREATE OR REPLACE PACKAGE pck_std_log
+CREATE OR REPLACE PACKAGE pck_std_log_v2
 AS
 /***************************************************************************\
 Package Description:
@@ -16,14 +16,14 @@ Package Description:
 General description of common input parameters
 
 	A_COMPONENT
-		The name of the component. A possible candidate would be the
+		The name of the caller_position. A possible candidate would be the
 		Package name if the caller is part of a package.
 		It may be the name of the calling procedure or function if it is
 		stand-alone.
 		Will be truncated if exceeds the length of the corresponding column
 
 	A_SUBCOMP
-		The name of the subcomponent. A possible candidate would be the
+		The name of the caller_position. A possible candidate would be the
 		procedure name if the calling procedure is part of a package.
 		It should be left blank if the calling procedure or function is
 		stand-alone.
@@ -36,9 +36,9 @@ General description of common input parameters
 \***************************************************************************/
 --
 PROCEDURE publish (
-	a_comp     IN log_table.component%type,
-	a_subcomp  IN log_table.subcomponent%type default null,
-	a_text     IN log_table.text%type
+	a_comp     IN log_table_v2.caller_position%type,
+	a_subcomp  IN log_table_v2.caller_position%type default null,
+	a_text     IN log_table_v2.text%type
 );
 /***************************************************************************\
 Procedure Description:
@@ -62,9 +62,9 @@ Output parameters:
 \***************************************************************************/
 --
 PROCEDURE info (
-	a_comp     IN log_table.component%type,
-	a_subcomp  IN log_table.subcomponent%type default null,
-	a_text     IN log_table.text%type
+	a_comp     IN log_table_v2.caller_position%type,
+	a_subcomp  IN log_table_v2.caller_position%type default null,
+	a_text     IN log_table_v2.text%type
 );
 /***************************************************************************\
 Procedure Description:
@@ -81,9 +81,9 @@ Output parameters:
 \***************************************************************************/
 --
 PROCEDURE debug (
-	a_comp     IN log_table.component%type,
-	a_subcomp  IN log_table.subcomponent%type default null,
-	a_text     IN log_table.text%type
+	a_comp     IN log_table_v2.caller_position%type,
+	a_subcomp  IN log_table_v2.caller_position%type default null,
+	a_text     IN log_table_v2.text%type
 );
 /***************************************************************************\
 Procedure Description:
@@ -98,11 +98,11 @@ Input parameters:
 Output parameters:
 \***************************************************************************/
 PROCEDURE error (
-	a_err_code IN log_table.err_code%type,
-	a_comp     IN log_table.component%type,
-	a_subcomp  IN log_table.subcomponent%type default null,
-	a_text     IN log_table.text%type,
-	a_log_id  OUT   log_table.id%type
+	a_err_code IN log_table_v2.err_code%type,
+	a_comp     IN log_table_v2.caller_position%type,
+	a_subcomp  IN log_table_v2.caller_position%type default null,
+	a_text     IN log_table_v2.text%type,
+	a_log_id  OUT   log_table_v2.id%type
 );
 
 /***************************************************************************\
@@ -111,10 +111,10 @@ Procedure Description:
 	without output parm.
 \***************************************************************************/
 PROCEDURE error (
-	a_err_code IN log_table.err_code%type,
-	a_comp     IN log_table.component%type,
-	a_subcomp  IN log_table.subcomponent%type default null,
-	a_text     IN log_table.text%type
+	a_err_code IN log_table_v2.err_code%type,
+	a_comp     IN log_table_v2.caller_position%type,
+	a_subcomp  IN log_table_v2.caller_position%type default null,
+	a_text     IN log_table_v2.text%type
 );
 
 /***************************************************************************\
@@ -143,8 +143,8 @@ Output parameters:
 \***************************************************************************/
 --
 PROCEDURE info_long (
-	a_comp     IN log_table.component%type,
-	a_subcomp  IN log_table.subcomponent%type default null,
+	a_comp     IN log_table_v2.caller_position%type,
+	a_subcomp  IN log_table_v2.caller_position%type default null,
 	a_text     IN clob
 )
 ;
@@ -164,7 +164,30 @@ Input parameters:
 		TRUE or FALSE
 Output parameters:
 \***************************************************************************/
-END;
+
+PROCEDURE dbx (
+	a_text     IN log_table_v2.text%type
+);
+
+PROCEDURE inf (
+	a_text     IN log_table_v2.text%type
+);
+
+PROCEDURE warn (
+	a_text     IN log_table_v2.text%type
+);
+
+PROCEDURE err (
+	a_text     IN log_table_v2.text%type
+ ,a_errno    IN NUMBER 
+);
+
+PROCEDURE pub (
+	a_text     IN log_table_v2.text%type
+);
+
+END; -- package 
+
 /
 
 show errors

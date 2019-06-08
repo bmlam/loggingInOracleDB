@@ -20,7 +20,23 @@ CREATE TABLE log_table
 --tablespace users
 pctfree 0
 ;
-
+create table log_table_v2
+( id NUMBER GENERATED ALWAYS AS IDENTITY
+ ,caller_position VARCHAR2(100 CHAR)
+ ,log_ts    TIMESTAMP default systimestamp  NOT NULL 
+ ,info_level	CHAR(1) NOT NULL check (info_level in ('I', 'D', 'E', 'P', 'W') )
+ ,err_code	number(10)
+ ,text	VARCHAR2(1000)
+ ,log_sess_id integer
+  ,osuser varchar2(30)
+  , part_key GENERATED ALWAYS AS ( EXTRACT( YEAR FROM log_ts) * 100 + EXTRACT( MONTH FROM log_ts) ) VIRTUAL
+	, PRIMARY KEY (id )
+ )
+ ;
+ --
+ -- write statement to migrate data !!!
+ --
+ 
 rem add partition for the current and next year
 set serverout out size 100000
 declare l_next_year date;
