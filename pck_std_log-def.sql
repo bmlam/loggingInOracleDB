@@ -1,4 +1,4 @@
-CREATE OR REPLACE PACKAGE pck_std_log_v2
+CREATE OR REPLACE PACKAGE pck_std_log
 AS
 /***************************************************************************\
 Package Description:
@@ -179,13 +179,17 @@ PROCEDURE warn (
 
 PROCEDURE err (
 	a_text     IN log_table_v2.text%type
- ,a_errno    IN NUMBER 
+ ,a_errno    IN NUMBER DEFAULT NULL 
 );
 
 PROCEDURE pub (
 	a_text     IN log_table_v2.text%type
 );
 
+FUNCTION count_of
+( a_info_level VARCHAR2)
+RETURN NUMBER
+;
 END; -- package 
 
 /

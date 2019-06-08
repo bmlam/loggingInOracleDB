@@ -1,9 +1,9 @@
 CREATE TABLE log_table
 (
 	id	NUMBER,
-	component	VARCHAR2(100) NOT NULL,
+	caller_position	VARCHAR2(100) NOT NULL,
 	log_user	VARCHAR2(30) not null,
-	subcomponent	VARCHAR2(100),
+	caller_position	VARCHAR2(100),
 	timestamp	DATE NOT NULL,
 	info_level	CHAR(1) NOT NULL ,
 	err_code	number(10),
@@ -64,9 +64,9 @@ create sequence log_table_seq;
 
 COMMENT ON COLUMN log_table.id IS 'can be referred with in other tables'
 ;
-COMMENT ON COLUMN log_table.component IS 'e.g package name or standalone procedure name'
+COMMENT ON COLUMN log_table.caller_position IS 'e.g package name or standalone procedure name'
 ;
-COMMENT ON COLUMN log_table.subcomponent IS 'e.g. name of procedure inside a package'
+COMMENT ON COLUMN log_table.caller_position IS 'e.g. name of procedure inside a package'
 ;
 COMMENT ON COLUMN log_table.timestamp IS 'when this entry is logged'
 

@@ -1,4 +1,4 @@
-CREATE OR REPLACE PACKAGE body pck_std_log_v2
+CREATE OR REPLACE PACKAGE body pck_std_log
 AS
 /***************************************************************************\
 Package Description:
@@ -18,7 +18,6 @@ Special logic:
 	logging will still take place in case of streaming. This is achieved
 	by checking the modulo of the message count againt a predefined value.
 
-Dependencies:
 
 Limitations:
 
@@ -42,6 +41,7 @@ c_sess_max_info      constant binary_integer := 10000;
 c_sess_max_info_long      constant binary_integer := 1000;
 c_sess_max_error     constant binary_integer := 100000;
 c_sess_max_publish   constant binary_integer := 100;
+c_sess_max_warning   constant binary_integer := 1000;
 --
 c_heartbeat_modulo   constant binary_integer := 10000;
 --
@@ -52,6 +52,8 @@ c_text_max_len       binary_integer := 1000;
 
 g_cached_long_flag boolean;
 g_cached_long_text clob ; 
+g_bump_anchor_level BOOLEAN := FALSE; -- since error has 2 signature and the second one is calling the first, 
+-- the second needs to flag adjustment of a_off_from_anchor
 
 /*******************************************************************
   Variable declaration
@@ -66,6 +68,7 @@ g_sess_cnt_info      binary_integer := 0;
 g_sess_cnt_error     binary_integer := 0;
 g_sess_cnt_publish   binary_integer := 0;
 g_sess_cnt_info_long binary_integer := 0;
+g_sess_cnt_warning   binary_integer := 0;
 --
 --
 g_log_id       log_table_v2.id%type;
@@ -91,7 +94,9 @@ AS
   l_return  log_table_v2.caller_position%TYPE;
 BEGIN
   l_call_stack := dbms_utility.format_call_stack;
-  DBMS_OUTPUT.pUT_LINE( $$PLSQL_UNIT||';'||$$PLSQL_LINE ||' a_offset_from_anchor: '||a_offset_from_anchor );
+  $IF $$DEBUG_PCK_STD_LOG = 1 $THEN 
+    DBMS_OUTPUT.pUT_LINE( $$PLSQL_UNIT||';'||$$PLSQL_LINE ||' a_offset_from_anchor: '||a_offset_from_anchor );
+  $END 
   WHILE l_loop_count_down > 0 LOOP
     l_sep_pos := INSTR( l_call_stack, lc_sep, l_scan_from );
     ltab_stack_line.extend;
@@ -104,12 +109,15 @@ BEGIN
       
       EXIT; 
     END IF; -- found separator 
+    $IF $$DEBUG_PCK_STD_LOG = 1 $THEN 
     DBMS_OUTPUT.pUT_LINE( $$PLSQL_UNIT||';'||$$PLSQL_LINE||' l_loop_count_down:'||l_loop_count_down||'  '||ltab_stack_line( ltab_stack_line.count ) );
- 
+    $END 
  l_loop_count_down := l_loop_count_down - 1;
   END LOOP; -- OVER lines in stack 
-  DBMS_OUTPUT.pUT_LINE( $$PLSQL_UNIT||';'||$$PLSQL_LINE||' stack lines found: '||ltab_stack_line.count);
-  
+  $IF $$DEBUG_PCK_STD_LOG = 1 $THEN 
+    DBMS_OUTPUT.pUT_LINE( $$PLSQL_UNIT||';'||$$PLSQL_LINE||' stack lines found: '||ltab_stack_line.count);
+   $END 
+ 
   FOR i IN 1 .. ltab_stack_line.COUNT LOOP
     IF i < 3 THEN 
       CONTINUE; -- first two lines is header, third line probably too but lets be careful and check it anyway
@@ -117,8 +125,10 @@ BEGIN
     IF  ltab_stack_line(i) LIKE '%'||$$PLSQL_UNIT||'.'||lc_anchor_name  
     THEN 
       lc_anchor_line_ix := i;
-      DBMS_OUTPUT.pUT_LINE( $$PLSQL_UNIT||';'||$$PLSQL_LINE||' found caller' );
-      
+      $IF $$DEBUG_PCK_STD_LOG = 1 $THEN 
+        DBMS_OUTPUT.pUT_LINE( $$PLSQL_UNIT||';'||$$PLSQL_LINE||' found caller' );
+      $END 
+     
       EXIT;
     END IF; -- found anchor  
   END LOOP;
@@ -144,8 +154,10 @@ return boolean
 as
 	l_cnt integer;
 begin
-	dbms_output.put_line('last_db_check: '||to_char(g_last_db_check, 'dd.Mon.rr hh24:mi:ss') );
-	dbms_output.put_line('debug_on: '||bool2char(g_debug_on));
+  $IF $$DEBUG_PCK_STD_LOG = 1 $THEN 
+    dbms_output.put_line('last_db_check: '||to_char(g_last_db_check, 'dd.Mon.rr hh24:mi:ss') );
+    dbms_output.put_line('debug_on: '||bool2char(g_debug_on));
+  $END 
 	if g_debug_on then
 		return g_debug_on;
 	end if;
@@ -153,7 +165,9 @@ begin
 	  or g_debug_on is null
 		or sysdate-g_last_db_check > 10 / (24*60*60) -- last check more than 10 seconds ago
 	then
-		dbms_output.put_line('g_osuser : '||g_osuser);
+    $IF $$DEBUG_PCK_STD_LOG = 1 $THEN 
+      dbms_output.put_line('g_osuser : '||g_osuser);
+    $END 
 		g_last_db_check := sysdate;
 		select count(*) into l_cnt
 		from debug_user
@@ -166,10 +180,12 @@ begin
 			) and upper(debug_on) = 'Y'
 			;
 		g_debug_on := l_cnt > 0;
-		dbms_output.put_line('ROWS  FOUND : '||l_cnt);
-		dbms_output.put_line('last_db_check: '||g_last_db_check);
-		dbms_output.put_line('debug_on: '
-		||case when g_debug_on then 't' when not g_debug_on then 'f' else 'null' end);
+   $IF $$DEBUG_PCK_STD_LOG = 1 $THEN 
+      dbms_output.put_line('ROWS  FOUND : '||l_cnt);
+      dbms_output.put_line('last_db_check: '||g_last_db_check);
+      dbms_output.put_line('debug_on: '		||case when g_debug_on then 't' when not g_debug_on then 'f' else 'null' end);
+    $END 
+      
 	end if; -- check time db lookup time
 	return g_debug_on;
 end debug_on;
@@ -187,27 +203,26 @@ Procedure Description:
 	The "single point of INSERT" to the log table
 Parameters:
 
-Dependencies:
-Special logic:
-	None
 Change history
 DDMMRR  Who   What
 ------  ---   ----------------------------------------------------------
 140301  Lam   Created
 \***************************************************************************/
 	pragma autonomous_transaction;
-  l_caller_position log_table_v2.caller_position%TYPE;
+
 begin
   
   insert into log_table_v2 (
+    $IF $$ORA_VERSION_BELOW_12 = 1 $THEN id, $END --LOG_TABLE_SEQ
 		log_sess_id,
 		caller_position,
 		log_user,   osuser,      info_level,
 		text,
 		err_code
 	) values (
+    $IF $$ORA_VERSION_BELOW_12 = 1 $THEN LOG_TABLE_SEQ.nextval, $END --
 		g_sess_id,
-		COALESCE( a_caller_position, a_comp||'.'||a_subcomp )
+		CASE WHEN a_comp IS NOT NULL THEN  a_comp||'.'||a_subcomp ELSE a_caller_position END 
 		, user,      g_osuser,     a_info_level,
 		substr(a_text, 1, c_text_max_len),
 		a_err_code
@@ -233,9 +248,9 @@ Procedure Description:
 	See interface description
 Parameters:
 	See interface description
-Dependencies:
+
 Special logic:
-	See "special logic" section of the package
+
 
 \***************************************************************************/
 c_procname   constant varchar2(60) := 'PUBLISH';
@@ -243,24 +258,21 @@ begin
 	if g_sess_cnt_publish <= c_sess_max_publish then
 		p_insert(
 			a_info_level=> c_il_publish
-			, a_comp=> a_comp, a_subcomp => a_subcomp
+			, a_comp=> a_comp
+      , a_subcomp => a_subcomp
+      , a_caller_position => CASE WHEN a_comp IS NULL THEN my_caller_precursor( a_offset_from_anchor => 2 ) END
 			, a_text => a_text);
 	else
 		if mod(g_sess_cnt_publish, c_heartbeat_modulo) = 1 then
 			p_insert(a_info_level=> c_il_info
 				, a_comp=> gc_pkg_name, a_subcomp=> c_procname,
-				a_text=> 'Value of g_sess_cnt_PUBLISH reaches ' || g_sess_cnt_publish ||
-				'. caller_position: ' || a_comp ||
-				'. caller_position: ' || a_subcomp
-			);
+				a_text=> 'Value of g_sess_cnt_PUBLISH reaches ' || g_sess_cnt_publish 
+	      , a_caller_position => CASE WHEN a_comp IS NULL THEN my_caller_precursor( a_offset_from_anchor => 2 ) END
+		);
 		end if;
 	end if;
 	g_sess_cnt_publish := g_sess_cnt_publish + 1;
-exception
-	when others then
-		v_errmsg := sqlerrm;
-		raise_application_error(-20001, 'c_procname: ' || c_procname ||' v_errmsg: ' || v_errmsg);
-end;
+end publish;
 --
 PROCEDURE info (
 	a_comp     IN log_table_v2.caller_position%type,
@@ -270,26 +282,22 @@ PROCEDURE info (
 /***************************************************************************\
 \***************************************************************************/
 	c_procname   constant varchar2(60) := 'INFO';
-  l_caller_position  log_table_v2.caller_position%TYPE;
 begin
-  l_caller_position :=  my_caller_precursor( a_offset_from_anchor=> 2 );
 	if g_sess_cnt_info <= c_sess_max_info then
 		p_insert( a_info_level=>c_il_info, a_comp=> a_comp, a_subcomp=> a_subcomp
-		, a_text=> a_text, a_caller_position => l_caller_position );
+      , a_caller_position => CASE WHEN a_comp IS NULL THEN my_caller_precursor( a_offset_from_anchor => 2 ) END
+      , a_text=> a_text
+    );
 	else
 		if mod(g_sess_cnt_info, c_heartbeat_modulo) = 1 then
 			p_insert( a_info_level=> c_il_info, a_comp=> gc_pkg_name, a_subcomp=> c_procname,
 				a_text=> 'Value of g_sess_cnt_info reaches ' || g_sess_cnt_info 
-        , a_caller_position => l_caller_position
+        , a_caller_position => CASE WHEN a_comp IS NULL THEN my_caller_precursor( a_offset_from_anchor => 2 ) END
 			);
 		end if;
 	end if;
 	g_sess_cnt_info := g_sess_cnt_info + 1;
-exception
-	when others then
-		v_errmsg := sqlerrm;
-		dbms_output.put_line('c_procname: ' || c_procname ||' v_errmsg: ' || v_errmsg);
-end;
+end info;
 --
 PROCEDURE debug (
 	a_comp     IN log_table_v2.caller_position%type,
@@ -301,9 +309,7 @@ Procedure Description:
 	See interface description
 Parameters:
 	See interface description
-Dependencies:
-Special logic:
-	See "special logic" section of the package
+
 Change history
 DDMMRR  Who   What
 ------  ---   ----------------------------------------------------------
@@ -318,20 +324,17 @@ begin
 		else
 			if mod(g_sess_cnt_debug, c_heartbeat_modulo) = 1 then
 				p_insert( a_info_level=> c_il_info, a_comp=> gc_pkg_name
-				, a_subcomp=> c_procname,
-					a_text => 'Value of g_sess_cnt_debug reaches ' || g_sess_cnt_debug ||
+				, a_subcomp=> c_procname
+        , a_caller_position => CASE WHEN a_comp IS NULL THEN my_caller_precursor( a_offset_from_anchor => 2 ) END
+				,	a_text => 'Value of g_sess_cnt_debug reaches ' || g_sess_cnt_debug ||
 					'. caller_position: ' || a_comp ||
-					'. caller_position: ' || a_subcomp
+					'.' || a_subcomp
 				);
 			end if;
 		end if;
 		g_sess_cnt_debug := g_sess_cnt_debug + 1;
 	end if;
-exception
-	when others then
-		v_errmsg := sqlerrm;
-		dbms_output.put_line('c_procname: ' || c_procname ||' v_errmsg: ' || v_errmsg);
-end;
+end debug;
 --
 PROCEDURE error (
 	a_err_code IN log_table_v2.err_code%type,
@@ -346,37 +349,35 @@ Procedure Description:
 Parameters:
 	See interface description
 Special logic:
-	See "special logic" section of the package
-Dependencies:
+  Adjust a_offset_from_anchor if needed
+
 Change history
 DDMMRR  Who   What
 ------  ---   ----------------------------------------------------------
 140301  Lam   Created
 \***************************************************************************/
 	c_procname   constant varchar2(60) := 'ERROR';
+  l_offset_from_anchor_used NUMBER;
 begin
+  l_offset_from_anchor_used := 2 + CASE WHEN g_bump_anchor_level THEN 1 ELSE 0 END;
 	a_log_id := null;
 	if g_sess_cnt_error <= c_sess_max_error then
 		p_insert(
 			a_info_level=> c_il_error, a_err_code=> a_err_code
 			, a_comp=> a_comp, a_subcomp=> a_subcomp
+      , a_caller_position => CASE WHEN a_comp IS NULL THEN my_caller_precursor( a_offset_from_anchor => l_offset_from_anchor_used ) END
 			, a_text=> a_text);
 		a_log_id := g_log_id;
 	else
 		if mod(g_sess_cnt_error, c_heartbeat_modulo) = 1 then
 			p_insert( a_info_level=> c_il_info
 			, a_comp=> gc_pkg_name, a_subcomp=> c_procname,
-				a_text=> 'Value of g_sess_cnt_error reaches ' || g_sess_cnt_error ||
-				'. caller_position: ' || a_comp ||
-				'. caller_position: ' || a_subcomp
-			);
+				a_text=> 'Value of g_sess_cnt_error reaches ' || g_sess_cnt_error 
+       , a_caller_position => CASE WHEN a_comp IS NULL THEN my_caller_precursor( a_offset_from_anchor => l_offset_from_anchor_used ) END
+		);
 		end if;
 	end if;
 	g_sess_cnt_error := g_sess_cnt_error + 1;
-exception
-	when others then
-		v_errmsg := sqlerrm;
-		dbms_output.put_line('c_procname: ' || c_procname ||' v_errmsg: ' || v_errmsg);
 end ERROR;
 --
 PROCEDURE switch_debug (
@@ -387,7 +388,7 @@ Procedure Description:
 	See interface description
 Parameters:
 	See interface description
-Dependencies:
+
 Special logic:
 	None
 Change history
@@ -419,7 +420,7 @@ Procedure Description:
 	See interface description
 Parameters:
 	See interface description
-Dependencies:
+
 Special logic:
 	None
 \***************************************************************************/
@@ -448,7 +449,7 @@ begin
 				a_text => 
 				'Value of g_sess_cnt_info_long reaches ' || g_sess_cnt_info_long ||
 				'. caller_position: ' || a_comp ||
-				'. caller_position: ' || a_subcomp
+				'.' || a_subcomp
 			);
 		end if;
 	end if; -- check sess_cnt_info_long 
@@ -466,20 +467,41 @@ PROCEDURE error (
 ) as
 	l_log_id integer;
 begin
+  g_bump_anchor_level := TRUE;
 	error (
-	a_err_code => a_err_code
-	,a_comp     => a_comp    
-	,a_subcomp  => a_subcomp 
-	,a_text     => a_text    
-      , a_log_id => l_log_id);          
+    a_err_code => a_err_code
+    ,a_comp     => a_comp    
+    ,a_subcomp  => a_subcomp 
+    ,a_text     => a_text    
+      , a_log_id => l_log_id
+   );       
+  g_bump_anchor_level := FALSE;
 end error;
 
 
 PROCEDURE dbx (
 	a_text     IN log_table_v2.text%type
 ) AS 
+  l_caller_position  log_table_v2.caller_position%TYPE;
 BEGIN
-NULL;
+  l_caller_position :=  my_caller_precursor( a_offset_from_anchor=> 2 );
+
+	if debug_on then
+  
+    if g_sess_cnt_debug <= c_sess_max_debug then
+      p_insert( a_info_level=>c_il_debug, a_comp=> NULL
+      , a_text=> a_text, a_caller_position => l_caller_position );
+    else
+      if mod(g_sess_cnt_debug, c_heartbeat_modulo) = 1 then
+        p_insert( a_info_level=> c_il_debug, a_comp=> NULL 
+          , a_text=> 'Value of g_sess_cnt_debug reaches ' || g_sess_cnt_debug 
+          , a_caller_position => l_caller_position
+        );
+      end if;
+    end if; -- check quota 
+  end if; -- check debug mode  
+	g_sess_cnt_debug := g_sess_cnt_debug + 1;
+
 END dbx;
 
 PROCEDURE inf (
@@ -506,24 +528,83 @@ END inf;
 PROCEDURE warn (
 	a_text     IN log_table_v2.text%type
 ) AS 
+  l_caller_position  log_table_v2.caller_position%TYPE;
 BEGIN
-NULL;
+    l_caller_position :=  my_caller_precursor( a_offset_from_anchor=> 2 );
+  
+  if g_sess_cnt_warning <= c_sess_max_warning then
+		p_insert( a_info_level=>c_il_warning, a_comp=> NULL
+		, a_text=> a_text, a_caller_position => l_caller_position );
+	else
+		if mod(g_sess_cnt_warning, c_heartbeat_modulo) = 1 then
+			p_insert( a_info_level=> c_il_warning, a_comp=> NULL 
+				, a_text=> 'Value of g_sess_cnt_warning reaches ' || g_sess_cnt_warning 
+        , a_caller_position => l_caller_position
+			);
+		end if;
+	end if;
+	g_sess_cnt_warning := g_sess_cnt_warning + 1;
 END warn;
 
 PROCEDURE err (
 	a_text     IN log_table_v2.text%type
- ,a_errno    IN NUMBER 
+ ,a_errno    IN NUMBER DEFAULT NULL 
 ) AS 
+  l_caller_position  log_table_v2.caller_position%TYPE;
 BEGIN
-NULL;
+    l_caller_position :=  my_caller_precursor( a_offset_from_anchor=> 2 );
+  
+  if g_sess_cnt_error <= c_sess_max_error then
+		p_insert( a_info_level=>c_il_error, a_comp=> NULL
+		, a_text=> a_text, a_caller_position => l_caller_position );
+	else
+		if mod(g_sess_cnt_error, c_heartbeat_modulo) = 1 then
+			p_insert( a_info_level=> c_il_error, a_comp=> NULL 
+				, a_text=> 'Value of g_sess_cnt_error reaches ' || g_sess_cnt_error 
+        , a_caller_position => l_caller_position
+			);
+		end if;
+	end if;
+	g_sess_cnt_error := g_sess_cnt_error + 1;
+
 END err;
 
 PROCEDURE pub (
 	a_text     IN log_table_v2.text%type
 ) AS 
+  l_caller_position  log_table_v2.caller_position%TYPE;
 BEGIN
-NULL;
+    l_caller_position :=  my_caller_precursor( a_offset_from_anchor=> 2 );
+  
+  if g_sess_cnt_publish <= c_sess_max_publish then
+		p_insert( a_info_level=>c_il_publish, a_comp=> NULL
+		, a_text=> a_text, a_caller_position => l_caller_position );
+	else
+		if mod(g_sess_cnt_publish, c_heartbeat_modulo) = 1 then
+			p_insert( a_info_level=> c_il_publish, a_comp=> NULL 
+				, a_text=> 'Value of g_sess_cnt_publish reaches ' || g_sess_cnt_publish 
+        , a_caller_position => l_caller_position
+			);
+		end if;
+	end if;
+	g_sess_cnt_publish := g_sess_cnt_publish + 1;
+
 END pub;
+
+
+FUNCTION count_of
+( a_info_level VARCHAR2)
+RETURN NUMBER
+AS
+BEGIN
+  RETURN CASE a_info_level
+  WHEN c_il_debug THEN g_sess_cnt_debug
+  WHEN c_il_info THEN g_sess_cnt_info
+  WHEN c_il_error THEN g_sess_cnt_error
+  WHEN c_il_warning THEN g_sess_cnt_warning
+  WHEN c_il_publish THEN g_sess_cnt_publish
+  END;
+END count_of;
 
 begin -- Package init stuff 
 	g_sess_id := sys_context('USERENV','SESSIONID');
