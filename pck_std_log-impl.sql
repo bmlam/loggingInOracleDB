@@ -216,7 +216,7 @@ begin
     $IF $$ORA_VERSION_BELOW_12 = 1 $THEN id, $END --LOG_TABLE_SEQ
 		log_sess_id,
 		caller_position,
-		log_user,   osuser,      info_level,
+		db_user,   osuser,      info_level,
 		text,
 		err_code
 	) values (
